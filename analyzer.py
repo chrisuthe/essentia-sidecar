@@ -50,6 +50,7 @@ _FLAT_TO_SHARP = {
 MODELS_PATH = Path(os.environ.get("ESSENTIA_MODELS_PATH", "/app/models"))
 _ml_available = False
 _ml_models: dict[str, Path] = {}
+_genre_labels: list[str] = []
 
 
 def _init_ml_models() -> None:
@@ -78,6 +79,17 @@ def _init_ml_models() -> None:
         if path.exists():
             _ml_models[key] = path
             found.append(key)
+
+    # Load genre label mapping
+    global _genre_labels  # noqa: PLW0603
+    labels_file = MODELS_PATH / "discogs-effnet-bs64-1.json"
+    if labels_file.exists():
+        import json
+
+        with open(labels_file) as f:
+            data = json.load(f)
+        _genre_labels = data.get("classes", [])
+        logger.info("Genre labels loaded: %d classes", len(_genre_labels))
 
     if found:
         _ml_available = True
@@ -211,7 +223,8 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
             mean_preds = preds.mean(axis=0)
             top_indices = np.argsort(mean_preds)[::-1][:5]
             for idx in top_indices:
-                genres[f"genre_{idx}"] = round(float(mean_preds[idx]), 4)
+                label = _genre_labels[idx] if idx < len(_genre_labels) else f"genre_{idx}"
+                genres[label] = round(float(mean_preds[idx]), 4)
         except Exception as exc:
             logger.warning("Genre failed: %s", exc)
 
