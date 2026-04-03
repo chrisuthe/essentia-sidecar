@@ -1,6 +1,28 @@
+# Lightweight (CPU only, no ML models)
+# docker compose up -d essentia-sidecar
+
+# Full (GPU + TensorFlow + ML models)
+# docker compose --profile gpu up -d essentia-sidecar-gpu
+
 services:
   essentia-sidecar:
     build: .
     ports:
       - "5030:5030"
     restart: unless-stopped
+
+  essentia-sidecar-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    ports:
+      - "5030:5030"
+    restart: unless-stopped
+    profiles: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

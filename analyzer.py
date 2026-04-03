@@ -4,13 +4,19 @@ Licensed under AGPL-3.0 — see LICENSE file.
 
 Receives raw PCM audio over HTTP, runs Essentia analysis, returns JSON
 compatible with Music Assistant's AudioAnalysisData model.
+
+When ML models are available (via ESSENTIA_MODELS_PATH env var), also
+extracts instrumentalness, valence, acousticness, danceability (ML),
+mood tags, and genre predictions.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import os
 import time
+from pathlib import Path
 
 import essentia.standard as es
 import numpy as np
@@ -27,6 +33,7 @@ app = Flask(__name__)
 
 _PITCH_CLASSES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 _TARGET_SR = 44100
+_ML_SR = 16000
 _FRAME_SIZE = 2048
 _HOP_SIZE = 1024
 _WAVEFORM_BINS = 800
@@ -38,6 +45,47 @@ _FLAT_TO_SHARP = {
     "Eb": "D#",
     "Gb": "F#",
 }
+
+# ML models directory — set via ESSENTIA_MODELS_PATH env var
+MODELS_PATH = Path(os.environ.get("ESSENTIA_MODELS_PATH", "/app/models"))
+_ml_available = False
+_ml_models: dict[str, Path] = {}
+
+
+def _init_ml_models() -> None:
+    """Discover available ML model files at startup."""
+    global _ml_available  # noqa: PLW0603
+    if not MODELS_PATH.is_dir():
+        logger.info("No models directory at %s — ML features disabled", MODELS_PATH)
+        return
+
+    model_files = {
+        "vggish_embeddings": "audioset-vggish-3.pb",
+        "musicnn_embeddings": "msd-musicnn-1.pb",
+        "effnet_embeddings": "discogs_artist_embeddings-effnet-bs64-1.pb",
+        "voice_instrumental": "voice_instrumental-vggish-audioset-1.pb",
+        "danceability": "danceability-vggish-audioset-1.pb",
+        "valence_arousal": "deam-msd-musicnn-2.pb",
+        "acoustic_electronic": "nsynth_acoustic_electronic-discogs-effnet-1.pb",
+        "mood_happy": "mood_happy-audioset-vggish-1.pb",
+        "mood_sad": "mood_sad-audioset-vggish-1.pb",
+        "mood_aggressive": "mood_aggressive-audioset-vggish-1.pb",
+        "mood_relaxed": "mood_relaxed-audioset-vggish-1.pb",
+        "genre_discogs400": "genre_discogs400-discogs-effnet-1.pb",
+    }
+
+    found = []
+    for key, filename in model_files.items():
+        path = MODELS_PATH / filename
+        if path.exists():
+            _ml_models[key] = path
+            found.append(key)
+
+    if found:
+        _ml_available = True
+        logger.info("ML models loaded: %s", ", ".join(found))
+    else:
+        logger.info("No ML model files found in %s", MODELS_PATH)
 
 
 def _clamp(value: float) -> float:
@@ -66,6 +114,144 @@ def _pcm_to_float32(pcm: bytes, bit_depth: int, channels: int) -> np.ndarray:
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1)
     return samples
+
+
+def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
+    """Extract ML-based features using TensorFlow models.
+
+    :param audio_44k: Mono float32 audio at 44100 Hz.
+    :returns: Dict of field_name -> value.
+    """
+    results: dict[str, object] = {}
+    if not _ml_available:
+        return results
+
+    # Resample to 16kHz for embedding models
+    audio_16k = es.Resample(
+        inputSampleRate=float(_TARGET_SR), outputSampleRate=float(_ML_SR)
+    )(audio_44k)
+
+    # --- VGGish embeddings (needed by voice_instrumental, danceability, moods) ---
+    vggish_embeddings = None
+    if "vggish_embeddings" in _ml_models:
+        try:
+            vggish_embeddings = es.TensorflowPredictVGGish(
+                graphFilename=str(_ml_models["vggish_embeddings"]),
+                output="model/vggish/embeddings",
+            )(audio_16k)
+            logger.debug("VGGish embeddings: shape %s", vggish_embeddings.shape)
+        except Exception as exc:
+            logger.warning("VGGish embeddings failed: %s", exc)
+
+    # --- MusiCNN embeddings (needed by valence/arousal) ---
+    musicnn_embeddings = None
+    if "musicnn_embeddings" in _ml_models:
+        try:
+            musicnn_embeddings = es.TensorflowPredictMusiCNN(
+                graphFilename=str(_ml_models["musicnn_embeddings"]),
+                output="model/dense/BiasAdd",
+            )(audio_16k)
+            logger.debug("MusiCNN embeddings: shape %s", musicnn_embeddings.shape)
+        except Exception as exc:
+            logger.warning("MusiCNN embeddings failed: %s", exc)
+
+    # --- EffNet embeddings (needed by acoustic_electronic, genre) ---
+    effnet_embeddings = None
+    if "effnet_embeddings" in _ml_models:
+        try:
+            effnet_embeddings = es.TensorflowPredictEffnetDiscogs(
+                graphFilename=str(_ml_models["effnet_embeddings"]),
+                output="PartitionedCall:1",
+            )(audio_16k)
+            logger.debug("EffNet embeddings: shape %s", effnet_embeddings.shape)
+        except Exception as exc:
+            logger.warning("EffNet embeddings failed: %s", exc)
+
+    # --- Voice/Instrumental -> instrumentalness ---
+    if "voice_instrumental" in _ml_models and vggish_embeddings is not None:
+        try:
+            preds = es.TensorflowPredict2D(
+                graphFilename=str(_ml_models["voice_instrumental"]),
+            )(vggish_embeddings)
+            # Class 0=voice, 1=instrumental
+            results["instrumentalness"] = _clamp(float(preds.mean(axis=0)[1]))
+            logger.debug("Instrumentalness: %.3f", results["instrumentalness"])
+        except Exception as exc:
+            logger.warning("Voice/instrumental model failed: %s", exc)
+
+    # --- Danceability ML (supplements DFA score) ---
+    if "danceability" in _ml_models and vggish_embeddings is not None:
+        try:
+            preds = es.TensorflowPredict2D(
+                graphFilename=str(_ml_models["danceability"]),
+            )(vggish_embeddings)
+            results["danceability"] = _clamp(float(preds.mean(axis=0)[1]))
+            logger.debug("Danceability ML: %.3f", results["danceability"])
+        except Exception as exc:
+            logger.warning("Danceability model failed: %s", exc)
+
+    # --- Valence/Arousal -> valence ---
+    if "valence_arousal" in _ml_models and musicnn_embeddings is not None:
+        try:
+            preds = es.TensorflowPredict2D(
+                graphFilename=str(_ml_models["valence_arousal"]),
+            )(musicnn_embeddings)
+            # DEAM model outputs [arousal, valence] on a 1-9 scale
+            valence_raw = float(preds.mean(axis=0)[1])
+            results["valence"] = _clamp((valence_raw - 1.0) / 8.0)
+            logger.debug("Valence: %.3f (raw %.2f)", results["valence"], valence_raw)
+        except Exception as exc:
+            logger.warning("Valence/arousal model failed: %s", exc)
+
+    # --- Acoustic/Electronic -> acousticness ---
+    if "acoustic_electronic" in _ml_models and effnet_embeddings is not None:
+        try:
+            preds = es.TensorflowPredict2D(
+                graphFilename=str(_ml_models["acoustic_electronic"]),
+            )(effnet_embeddings)
+            # Class 0=acoustic, 1=electronic — invert for acousticness
+            results["acousticness"] = _clamp(float(preds.mean(axis=0)[0]))
+            logger.debug("Acousticness: %.3f", results["acousticness"])
+        except Exception as exc:
+            logger.warning("Acoustic/electronic model failed: %s", exc)
+
+    # --- Mood classifiers -> extra_data ---
+    moods: dict[str, float] = {}
+    for mood_name in ("mood_happy", "mood_sad", "mood_aggressive", "mood_relaxed"):
+        if mood_name in _ml_models and vggish_embeddings is not None:
+            try:
+                preds = es.TensorflowPredict2D(
+                    graphFilename=str(_ml_models[mood_name]),
+                )(vggish_embeddings)
+                moods[mood_name] = round(float(preds.mean(axis=0)[1]), 4)
+            except Exception as exc:
+                logger.warning("%s model failed: %s", mood_name, exc)
+
+    # --- Genre (Discogs 400) -> extra_data ---
+    genres: dict[str, float] = {}
+    if "genre_discogs400" in _ml_models and effnet_embeddings is not None:
+        try:
+            preds = es.TensorflowPredict2D(
+                graphFilename=str(_ml_models["genre_discogs400"]),
+            )(effnet_embeddings)
+            mean_preds = preds.mean(axis=0)
+            # Get top 5 genre predictions
+            top_indices = np.argsort(mean_preds)[::-1][:5]
+            for idx in top_indices:
+                genres[f"genre_{idx}"] = round(float(mean_preds[idx]), 4)
+        except Exception as exc:
+            logger.warning("Genre model failed: %s", exc)
+
+    # Pack moods + genres into extra_data
+    extra: dict[str, object] = {}
+    if moods:
+        extra["moods"] = moods
+    if genres:
+        extra["genre_predictions"] = genres
+    if extra:
+        results["extra_data"] = extra
+
+    return results
 
 
 def analyze(audio: np.ndarray, sample_rate: int) -> dict:
@@ -106,7 +292,7 @@ def analyze(audio: np.ndarray, sample_rate: int) -> dict:
     mean_rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
     energy = _clamp(mean_rms / 0.25)
 
-    # --- Danceability ---
+    # --- Danceability (DFA-based, may be overridden by ML) ---
     dance_score, _ = es.Danceability(sampleRate=float(sample_rate))(audio)
     danceability = _clamp(float(dance_score) / 3.0)
 
@@ -114,7 +300,6 @@ def analyze(audio: np.ndarray, sample_rate: int) -> dict:
     nyquist = sample_rate / 2.0
     spec_algo = es.Spectrum()
     w = es.Windowing(type="hann")
-    centroid_algo = es.Centroid(range=nyquist)
     dissonance_algo = es.Dissonance()
     peaks_algo = es.SpectralPeaks(
         sampleRate=float(sample_rate), maxPeaks=50, minFrequency=20.0, maxFrequency=nyquist
@@ -131,7 +316,6 @@ def analyze(audio: np.ndarray, sample_rate: int) -> dict:
         spectrum = spec_algo(w(frame))
         rms_frames.append(float(rms_algo(frame)))
 
-        # Compute spectral centroid in Hz manually: weighted average of bin frequencies
         n_bins = len(spectrum)
         if n_bins > 0:
             bin_freqs = np.linspace(0, nyquist, n_bins)
@@ -147,11 +331,8 @@ def analyze(audio: np.ndarray, sample_rate: int) -> dict:
             roughness_vals.append(float(dissonance_algo(freqs, mags)))
         complexity_vals.append(float(complexity_algo(spectrum)))
 
-    # Brightness: mean centroid in Hz normalized by Nyquist
     brightness = _clamp(float(np.mean(centroid_hz_vals)) / nyquist) if centroid_hz_vals else 0.0
     roughness = _clamp(float(np.mean(roughness_vals))) if roughness_vals else 0.0
-    # SpectralComplexity returns number of spectral peaks per frame
-    # Typical range for music is 0-50, normalize accordingly
     harmonic_complexity = _clamp(float(np.mean(complexity_vals)) / 50.0) if complexity_vals else 0.0
 
     # --- Per-second arrays ---
@@ -181,7 +362,7 @@ def analyze(audio: np.ndarray, sample_rate: int) -> dict:
     if wf_max > 0:
         waveform = [v / wf_max for v in waveform]
 
-    return {
+    result = {
         "bpm": float(bpm),
         "beats": [float(b) for b in beats],
         "key": str(key),
@@ -201,11 +382,24 @@ def analyze(audio: np.ndarray, sample_rate: int) -> dict:
         "duration": float(len(audio) / sample_rate),
     }
 
+    # --- ML features (if models available) ---
+    ml_features = _extract_ml_features(audio)
+    if ml_features:
+        ml_count = len([k for k in ml_features if k != "extra_data"])
+        logger.info("ML features extracted: %d fields", ml_count)
+        result.update(ml_features)
+
+    return result
+
 
 @app.route("/health")
 def health() -> Response:
     """Health check endpoint."""
-    return jsonify({"status": "ok"})
+    return jsonify({
+        "status": "ok",
+        "ml_available": _ml_available,
+        "ml_models": list(_ml_models.keys()),
+    })
 
 
 @app.route("/analyze", methods=["POST"])
@@ -229,25 +423,35 @@ def analyze_endpoint() -> Response:
         return jsonify({"error": "Audio too short (< 2 seconds)"}), 400
 
     logger.info(
-        "Analyzing: %.1fs audio (%.1f MB, %dHz %dbit %dch)",
+        "Analyzing: %.1fs audio (%.1f MB, %dHz %dbit %dch) [ML=%s]",
         duration_sec, pcm_mb, sample_rate, bit_depth, channels,
+        "yes" if _ml_available else "no",
     )
 
     result = analyze(audio, sample_rate)
     elapsed = time.monotonic() - t_start
 
+    ml_fields = []
+    for f in ("instrumentalness", "valence", "acousticness"):
+        if f in result:
+            ml_fields.append(f"{f}={result[f]:.2f}")
+
     logger.info(
-        "Done: %.1fs audio -> BPM=%.1f key=%s %s (%.1fs elapsed, %.1fx realtime)",
+        "Done: %.1fs audio -> BPM=%.1f key=%s %s (%.1fs, %.1fx RT)%s",
         duration_sec,
         result.get("bpm", 0),
         result.get("key", "?"),
         result.get("mode", "?"),
         elapsed,
         duration_sec / elapsed if elapsed > 0 else 0,
+        " | " + " ".join(ml_fields) if ml_fields else "",
     )
 
     return jsonify(result)
 
+
+# Initialize ML models at module load time
+_init_ml_models()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5030)

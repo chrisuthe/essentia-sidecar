@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Push Docker Images
 
 on:
   push:
@@ -6,39 +6,68 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_BASE: ${{ github.repository }}
 
 jobs:
-  build:
+  build-lite:
+    name: Build Lite (CPU only)
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - uses: docker/metadata-action@v5
         id: meta
-        uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}
           tags: |
             type=raw,value=latest
-            type=sha,prefix=
+            type=raw,value=lite
+            type=sha,prefix=lite-
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  build-gpu:
+    name: Build GPU (TensorFlow + ML models)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}
+          tags: |
+            type=raw,value=gpu
+            type=sha,prefix=gpu-
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.gpu
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
