@@ -183,65 +183,70 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
             logger.error("EffNet embeddings failed: %s", exc, exc_info=True)
 
     # --- Stage 2: Classification heads ---
+    # Note: TensorflowPredict2D default input="model/Placeholder" output="model/Sigmoid"
+    # Many classification heads use different node names — we need to specify them.
+
+    # Helper to try multiple node name patterns for a classification head
+    def _predict_head(
+        model_key: str, embeddings: np.ndarray, label: str
+    ) -> np.ndarray | None:
+        """Try loading a classification head with different node name patterns."""
+        if model_key not in _ml_models:
+            return None
+        model_path = str(_ml_models[model_key])
+        # Try common node name patterns used by Essentia classification heads
+        patterns = [
+            {"input": "serving_default_model_Placeholder", "output": "PartitionedCall:0"},
+            {"input": "model/Placeholder", "output": "model/Sigmoid"},
+            {"input": "model/Placeholder", "output": "model/Identity"},
+            {},  # defaults
+        ]
+        for nodes in patterns:
+            try:
+                preds = es.TensorflowPredict2D(
+                    graphFilename=model_path, **nodes
+                )(embeddings)
+                logger.info("%s succeeded with nodes %s", label, nodes or "defaults")
+                return preds
+            except Exception:
+                continue
+        logger.error("%s failed with all node patterns", label)
+        return None
 
     # VGGish-based heads
     if vggish_emb is not None:
-        if "voice_instrumental" in _ml_models:
-            try:
-                preds = es.TensorflowPredict2D(
-                    graphFilename=str(_ml_models["voice_instrumental"]),
-                )(vggish_emb)
-                results["instrumentalness"] = _clamp(float(preds.mean(axis=0)[1]))
-                logger.info("Instrumentalness: %.3f", results["instrumentalness"])
-            except Exception as exc:
-                logger.error("Voice/instrumental failed: %s", exc, exc_info=True)
+        preds = _predict_head("voice_instrumental", vggish_emb, "Voice/instrumental")
+        if preds is not None:
+            results["instrumentalness"] = _clamp(float(preds.mean(axis=0)[1]))
+            logger.info("Instrumentalness: %.3f", results["instrumentalness"])
 
-        if "danceability" in _ml_models:
-            try:
-                preds = es.TensorflowPredict2D(
-                    graphFilename=str(_ml_models["danceability"]),
-                )(vggish_emb)
-                results["danceability"] = _clamp(float(preds.mean(axis=0)[1]))
-                logger.info("Danceability ML: %.3f", results["danceability"])
-            except Exception as exc:
-                logger.error("Danceability ML failed: %s", exc, exc_info=True)
+        preds = _predict_head("danceability", vggish_emb, "Danceability ML")
+        if preds is not None:
+            results["danceability"] = _clamp(float(preds.mean(axis=0)[1]))
+            logger.info("Danceability ML: %.3f", results["danceability"])
 
         moods: dict[str, float] = {}
         for mood_name in ("mood_happy", "mood_sad", "mood_aggressive", "mood_relaxed"):
-            if mood_name in _ml_models:
-                try:
-                    preds = es.TensorflowPredict2D(
-                        graphFilename=str(_ml_models[mood_name]),
-                    )(vggish_emb)
-                    moods[mood_name] = round(float(preds.mean(axis=0)[1]), 4)
-                except Exception as exc:
-                    logger.error("%s failed: %s", mood_name, exc, exc_info=True)
+            preds = _predict_head(mood_name, vggish_emb, mood_name)
+            if preds is not None:
+                moods[mood_name] = round(float(preds.mean(axis=0)[1]), 4)
     else:
         moods = {}
 
     # MusiCNN-based heads
-    if musicnn_emb is not None and "valence_arousal" in _ml_models:
-        try:
-            preds = es.TensorflowPredict2D(
-                graphFilename=str(_ml_models["valence_arousal"]),
-            )(musicnn_emb)
+    if musicnn_emb is not None:
+        preds = _predict_head("valence_arousal", musicnn_emb, "Valence/arousal")
+        if preds is not None:
             valence_raw = float(preds.mean(axis=0)[1])
             results["valence"] = _clamp((valence_raw - 1.0) / 8.0)
             logger.info("Valence: %.3f (raw %.2f)", results["valence"], valence_raw)
-        except Exception as exc:
-            logger.error("Valence/arousal failed: %s", exc, exc_info=True)
 
     # EffNet-based heads
     if effnet_emb is not None:
-        if "acoustic_electronic" in _ml_models:
-            try:
-                preds = es.TensorflowPredict2D(
-                    graphFilename=str(_ml_models["acoustic_electronic"]),
-                )(effnet_emb)
-                results["acousticness"] = _clamp(float(preds.mean(axis=0)[0]))
-                logger.info("Acousticness: %.3f", results["acousticness"])
-            except Exception as exc:
-                logger.error("Acoustic/electronic failed: %s", exc, exc_info=True)
+        preds = _predict_head("acoustic_electronic", effnet_emb, "Acoustic/electronic")
+        if preds is not None:
+            results["acousticness"] = _clamp(float(preds.mean(axis=0)[0]))
+            logger.info("Acousticness: %.3f", results["acousticness"])
 
         genres: dict[str, float] = {}
         if "genre_discogs400" in _ml_models:
