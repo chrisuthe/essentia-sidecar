@@ -1,17 +1,14 @@
-FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04
+FROM python:3.12-slim-bookworm
 
-ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 WORKDIR /app
 
-# Python 3.12 + essentials
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.12 python3.12-venv python3.12-dev python3-pip curl \
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3.12 -m pip install --no-cache-dir \
+RUN pip install --no-cache-dir \
     essentia-tensorflow==2.1b6.dev1389 \
     flask==3.1.0 \
     gunicorn==23.0.0 \
@@ -19,22 +16,15 @@ RUN python3.12 -m pip install --no-cache-dir \
 
 # Download ML models
 RUN mkdir -p /app/models && cd /app/models \
-    # Voice/Instrumental -> instrumentalness
     && curl -sLO https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-vggish-audioset-1.pb \
-    # Danceability ML
     && curl -sLO https://essentia.upf.edu/models/classification-heads/danceability/danceability-vggish-audioset-1.pb \
-    # Mood valence/arousal -> valence
     && curl -sLO https://essentia.upf.edu/models/classification-heads/deam/deam-msd-musicnn-2.pb \
-    # Acoustic/Electronic -> acousticness
     && curl -sLO https://essentia.upf.edu/models/classification-heads/nsynth_acoustic_electronic/nsynth_acoustic_electronic-discogs-effnet-1.pb \
-    # Mood classifiers
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_happy/mood_happy-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_sad/mood_sad-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_aggressive/mood_aggressive-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_relaxed/mood_relaxed-audioset-vggish-1.pb \
-    # Genre (Discogs 400)
     && curl -sLO https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb \
-    # Embedding extractors (needed by classification heads)
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/vggish/audioset-vggish-3.pb \
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/musicnn/msd-musicnn-1.pb \
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs_artist_embeddings-effnet-bs64-1.pb
@@ -45,4 +35,4 @@ ENV ESSENTIA_MODELS_PATH=/app/models
 
 EXPOSE 5030
 
-CMD ["python3.12", "-m", "gunicorn", "-b", "0.0.0.0:5030", "-w", "2", "--timeout", "300", "analyzer:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:5030", "-w", "2", "--timeout", "300", "analyzer:app"]
