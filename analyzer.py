@@ -159,7 +159,7 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
             results["instrumentalness"] = _clamp(float(preds.mean(axis=0)[1]))
             logger.debug("Instrumentalness: %.3f", results["instrumentalness"])
         except Exception as exc:
-            logger.warning("Voice/instrumental failed: %s", exc)
+            logger.error("Voice/instrumental failed: %s", exc, exc_info=True)
 
     if "danceability" in _ml_models:
         try:
@@ -169,7 +169,7 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
             results["danceability"] = _clamp(float(preds.mean(axis=0)[1]))
             logger.debug("Danceability ML: %.3f", results["danceability"])
         except Exception as exc:
-            logger.warning("Danceability ML failed: %s", exc)
+            logger.error("Danceability ML failed: %s", exc, exc_info=True)
 
     moods: dict[str, float] = {}
     for mood_name in ("mood_happy", "mood_sad", "mood_aggressive", "mood_relaxed"):
@@ -180,7 +180,7 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
                 )(audio_16k)
                 moods[mood_name] = round(float(preds.mean(axis=0)[1]), 4)
             except Exception as exc:
-                logger.warning("%s failed: %s", mood_name, exc)
+                logger.error("%s failed: %s", mood_name, exc, exc_info=True)
 
     # --- MusiCNN-based models (valence/arousal) ---
     if "valence_arousal" in _ml_models:
@@ -193,7 +193,7 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
             results["valence"] = _clamp((valence_raw - 1.0) / 8.0)
             logger.debug("Valence: %.3f (raw %.2f)", results["valence"], valence_raw)
         except Exception as exc:
-            logger.warning("Valence/arousal failed: %s", exc)
+            logger.error("Valence/arousal failed: %s", exc, exc_info=True)
 
     # --- EffNet-based models (acoustic/electronic, genre) ---
     if "acoustic_electronic" in _ml_models:
@@ -205,7 +205,7 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
             results["acousticness"] = _clamp(float(preds.mean(axis=0)[0]))
             logger.debug("Acousticness: %.3f", results["acousticness"])
         except Exception as exc:
-            logger.warning("Acoustic/electronic failed: %s", exc)
+            logger.error("Acoustic/electronic failed: %s", exc, exc_info=True)
 
     genres: dict[str, float] = {}
     if "genre_discogs400" in _ml_models and "effnet_embeddings" in _ml_models:
@@ -226,7 +226,7 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
                 label = _genre_labels[idx] if idx < len(_genre_labels) else f"genre_{idx}"
                 genres[label] = round(float(mean_preds[idx]), 4)
         except Exception as exc:
-            logger.warning("Genre failed: %s", exc)
+            logger.error("Genre failed: %s", exc, exc_info=True)
 
     # Pack moods + genres into extra_data
     extra: dict[str, object] = {}
