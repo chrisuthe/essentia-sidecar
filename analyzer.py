@@ -191,8 +191,8 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
 
     # Node name mappings per model type
     _HEAD_NODES: dict[str, dict[str, str]] = {
-        "voice_instrumental": {"input": "model/Placeholder", "output": "model/Sigmoid"},
-        "danceability": {"input": "model/Placeholder", "output": "model/Sigmoid"},
+        "voice_instrumental": {"input": "model/Placeholder", "output": "model/Softmax"},
+        "danceability": {"input": "model/Placeholder", "output": "model/Softmax"},
         "mood_happy": {"input": "model/Placeholder", "output": "model/Softmax"},
         "mood_sad": {"input": "model/Placeholder", "output": "model/Softmax"},
         "mood_aggressive": {"input": "model/Placeholder", "output": "model/Softmax"},
