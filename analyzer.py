@@ -67,14 +67,8 @@ def _init_ml_models() -> None:
         "musicnn_embeddings": ["msd-musicnn-1.pb"],
         "effnet_embeddings": ["discogs_artist_embeddings-effnet-bs64-1.pb"],
         # Classification heads — try multiple filename patterns
-        "voice_instrumental": [
-            "voice_instrumental-audioset-vggish-1.pb",
-            "voice_instrumental-vggish-audioset-1.pb",
-        ],
-        "danceability": [
-            "danceability-audioset-vggish-1.pb",
-            "danceability-vggish-audioset-1.pb",
-        ],
+        "voice_instrumental": ["voice_instrumental-audioset-vggish-1.pb"],
+        "danceability": ["danceability-audioset-vggish-1.pb"],
         "valence_arousal": ["deam-msd-musicnn-2.pb"],
         "acoustic_electronic": ["nsynth_acoustic_electronic-discogs-effnet-1.pb"],
         "mood_happy": ["mood_happy-audioset-vggish-1.pb"],
@@ -107,19 +101,6 @@ def _init_ml_models() -> None:
     if found:
         _ml_available = True
         logger.info("ML models loaded: %s", ", ".join(found))
-        # Dump node names from each model for debugging
-        for key, path in _ml_models.items():
-            if key in ("vggish_embeddings", "musicnn_embeddings", "effnet_embeddings"):
-                continue  # skip embedding extractors
-            try:
-                import tensorflow as tf
-                with open(str(path), "rb") as f:
-                    graph_def = tf.compat.v1.GraphDef()
-                    graph_def.ParseFromString(f.read())
-                node_names = [n.name for n in graph_def.node]
-                logger.info("Model %s nodes: %s", key, node_names[:10])
-            except Exception as exc:
-                logger.warning("Could not inspect %s: %s", key, exc)
     else:
         logger.info("No ML model files found in %s", MODELS_PATH)
 
