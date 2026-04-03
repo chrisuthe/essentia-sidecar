@@ -98,6 +98,19 @@ def _init_ml_models() -> None:
     if found:
         _ml_available = True
         logger.info("ML models loaded: %s", ", ".join(found))
+        # Dump node names from each model for debugging
+        for key, path in _ml_models.items():
+            if key in ("vggish_embeddings", "musicnn_embeddings", "effnet_embeddings"):
+                continue  # skip embedding extractors
+            try:
+                import tensorflow as tf
+                with open(str(path), "rb") as f:
+                    graph_def = tf.compat.v1.GraphDef()
+                    graph_def.ParseFromString(f.read())
+                node_names = [n.name for n in graph_def.node]
+                logger.info("Model %s nodes: %s", key, node_names[:10])
+            except Exception as exc:
+                logger.warning("Could not inspect %s: %s", key, exc)
     else:
         logger.info("No ML model files found in %s", MODELS_PATH)
 
