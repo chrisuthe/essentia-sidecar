@@ -22,6 +22,20 @@ import essentia.standard as es
 import numpy as np
 from flask import Flask, Response, jsonify, request
 
+# Limit TF GPU memory — don't pre-allocate the entire GPU
+try:
+    import tensorflow as tf
+
+    gpus = tf.config.list_physical_devices("GPU")
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+    if gpus:
+        logging.getLogger("essentia-sidecar").info(
+            "TF GPU memory growth enabled for %d device(s)", len(gpus)
+        )
+except Exception:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",

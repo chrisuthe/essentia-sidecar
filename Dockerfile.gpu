@@ -48,4 +48,5 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_
 
 EXPOSE 5030
 
-CMD ["python3", "-m", "gunicorn", "-b", "0.0.0.0:5030", "-w", "2", "--timeout", "300", "analyzer:app"]
+# Single worker to avoid GPU memory contention between workers
+CMD ["python3", "-m", "gunicorn", "-b", "0.0.0.0:5030", "-w", "1", "--timeout", "300", "analyzer:app"]
