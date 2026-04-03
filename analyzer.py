@@ -113,27 +113,37 @@ def analyze(audio: np.ndarray, sample_rate: int) -> dict:
     complexity_algo = es.SpectralComplexity(sampleRate=float(sample_rate))
     rms_algo = es.RMS()
 
-    centroids = []
+    centroid_hz_vals = []
     roughness_vals = []
     complexity_vals = []
     rms_frames = []
-    centroid_frames = []
 
     for frame in es.FrameGenerator(audio, frameSize=_FRAME_SIZE, hopSize=_HOP_SIZE):
         spectrum = spec_algo(w(frame))
-        c = float(centroid_algo(spectrum))
-        centroids.append(c)
-        centroid_frames.append(c * nyquist)
         rms_frames.append(float(rms_algo(frame)))
+
+        # Compute spectral centroid in Hz manually: weighted average of bin frequencies
+        n_bins = len(spectrum)
+        if n_bins > 0:
+            bin_freqs = np.linspace(0, nyquist, n_bins)
+            spec_sum = float(np.sum(spectrum))
+            if spec_sum > 0:
+                centroid_hz = float(np.sum(bin_freqs * spectrum) / spec_sum)
+            else:
+                centroid_hz = 0.0
+            centroid_hz_vals.append(centroid_hz)
 
         freqs, mags = peaks_algo(spectrum)
         if len(freqs) > 1:
             roughness_vals.append(float(dissonance_algo(freqs, mags)))
         complexity_vals.append(float(complexity_algo(spectrum)))
 
-    brightness = _clamp(float(np.mean(centroids))) if centroids else 0.0
+    # Brightness: mean centroid in Hz normalized by Nyquist
+    brightness = _clamp(float(np.mean(centroid_hz_vals)) / nyquist) if centroid_hz_vals else 0.0
     roughness = _clamp(float(np.mean(roughness_vals))) if roughness_vals else 0.0
-    harmonic_complexity = _clamp(float(np.mean(complexity_vals)) / 20.0) if complexity_vals else 0.0
+    # SpectralComplexity returns number of spectral peaks per frame
+    # Typical range for music is 0-50, normalize accordingly
+    harmonic_complexity = _clamp(float(np.mean(complexity_vals)) / 50.0) if complexity_vals else 0.0
 
     # --- Per-second arrays ---
     fps = sample_rate / _HOP_SIZE
@@ -146,7 +156,7 @@ def analyze(audio: np.ndarray, sample_rate: int) -> dict:
         end = int((s + 1) * fps)
         rms_per_sec.append(float(np.mean(rms_frames[start:end])) if start < len(rms_frames) else 0.0)
         centroid_per_sec.append(
-            float(np.mean(centroid_frames[start:end])) if start < len(centroid_frames) else 0.0
+            float(np.mean(centroid_hz_vals[start:end])) if start < len(centroid_hz_vals) else 0.0
         )
 
     # --- Waveform ---
