@@ -69,6 +69,7 @@ def _init_ml_models() -> None:
         "mood_aggressive": "mood_aggressive-audioset-vggish-1.pb",
         "mood_relaxed": "mood_relaxed-audioset-vggish-1.pb",
         "genre_discogs400": "genre_discogs400-discogs-effnet-1.pb",
+        "effnet_embeddings": "discogs_artist_embeddings-effnet-bs64-1.pb",
     }
 
     found = []
@@ -195,11 +196,18 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
             logger.warning("Acoustic/electronic failed: %s", exc)
 
     genres: dict[str, float] = {}
-    if "genre_discogs400" in _ml_models:
+    if "genre_discogs400" in _ml_models and "effnet_embeddings" in _ml_models:
         try:
-            preds = es.TensorflowPredictEffnetDiscogs(
-                graphFilename=str(_ml_models["genre_discogs400"]),
+            # Extract EffNet embeddings first, then feed to genre classification head
+            embeddings = es.TensorflowPredictEffnetDiscogs(
+                graphFilename=str(_ml_models["effnet_embeddings"]),
+                output="PartitionedCall:1",
             )(audio_16k)
+            preds = es.TensorflowPredict2D(
+                graphFilename=str(_ml_models["genre_discogs400"]),
+                input="serving_default_model_Placeholder",
+                output="PartitionedCall:0",
+            )(embeddings)
             mean_preds = preds.mean(axis=0)
             top_indices = np.argsort(mean_preds)[::-1][:5]
             for idx in top_indices:

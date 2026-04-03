@@ -24,7 +24,9 @@ RUN mkdir -p /app/models && cd /app/models \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_sad/mood_sad-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_aggressive/mood_aggressive-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_relaxed/mood_relaxed-audioset-vggish-1.pb \
-    && curl -sLO https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb
+    && curl -sLO https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb \
+    # EffNet embedding extractor (needed by genre classification head)
+    && curl -sLO https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs_artist_embeddings-effnet-bs64-1.pb
 
 COPY analyzer.py .
 
