@@ -1,8 +1,7 @@
-# Stage 1: Build essentia-tensorflow in a Python 3.12 environment
-FROM python:3.12-slim-bookworm AS builder
+# Stage 1: Install packages and download models in a clean Python env
+FROM python:3.10-slim-bullseye AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential curl \
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
@@ -11,7 +10,6 @@ RUN pip install --no-cache-dir \
     gunicorn==23.0.0 \
     numpy==2.2.0
 
-# Download ML models
 RUN mkdir -p /models && cd /models \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/danceability/danceability-audioset-vggish-1.pb \
@@ -27,39 +25,28 @@ RUN mkdir -p /models && cd /models \
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs_artist_embeddings-effnet-bs64-1.pb \
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.json
 
-# Stage 2: Runtime with CUDA support
-# TF 2.11 (bundled with essentia-tensorflow) needs CUDA 11.x + cuDNN 8.x
+# Stage 2: CUDA runtime with Python packages copied in
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Python 3.12 from deadsnakes PPA (Ubuntu 22.04 only has 3.10)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-    python3.12 python3.12-venv python3.12-distutils \
-    && rm -rf /var/lib/apt/lists/* \
-    && python3.12 -m ensurepip
+    python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/dist-packages
+# Copy installed Python packages from builder (3.10 matches Ubuntu 22.04's system Python)
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/lib/python3/dist-packages
 COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/gunicorn
-
-# Copy models
 COPY --from=builder /models /app/models
-
 COPY analyzer.py .
 
 ENV ESSENTIA_MODELS_PATH=/app/models
-# Tell TF where to find CUDA libs
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 
 EXPOSE 5030
 
-CMD ["python3.12", "-m", "gunicorn", "-b", "0.0.0.0:5030", "-w", "2", "--timeout", "300", "analyzer:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:5030", "-w", "2", "--timeout", "300", "analyzer:app"]
