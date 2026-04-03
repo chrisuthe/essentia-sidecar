@@ -8,11 +8,20 @@ compatible with Music Assistant's AudioAnalysisData model.
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 
 import essentia.standard as es
 import numpy as np
 from flask import Flask, Response, jsonify, request
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("essentia-sidecar")
 
 app = Flask(__name__)
 
@@ -202,6 +211,7 @@ def health() -> Response:
 @app.route("/analyze", methods=["POST"])
 def analyze_endpoint() -> Response:
     """Analyze raw PCM audio and return AudioAnalysisData-compatible JSON."""
+    t_start = time.monotonic()
     sample_rate = int(request.args.get("sample_rate", 44100))
     bit_depth = int(request.args.get("bit_depth", 16))
     channels = int(request.args.get("channels", 2))
@@ -210,12 +220,32 @@ def analyze_endpoint() -> Response:
     if not pcm_data:
         return jsonify({"error": "No audio data"}), 400
 
+    pcm_mb = len(pcm_data) / (1024 * 1024)
     audio = _pcm_to_float32(pcm_data, bit_depth, channels)
+    duration_sec = len(audio) / sample_rate
 
     if len(audio) < sample_rate * 2:
+        logger.warning("Rejected: audio too short (%.1fs)", duration_sec)
         return jsonify({"error": "Audio too short (< 2 seconds)"}), 400
 
+    logger.info(
+        "Analyzing: %.1fs audio (%.1f MB, %dHz %dbit %dch)",
+        duration_sec, pcm_mb, sample_rate, bit_depth, channels,
+    )
+
     result = analyze(audio, sample_rate)
+    elapsed = time.monotonic() - t_start
+
+    logger.info(
+        "Done: %.1fs audio -> BPM=%.1f key=%s %s (%.1fs elapsed, %.1fx realtime)",
+        duration_sec,
+        result.get("bpm", 0),
+        result.get("key", "?"),
+        result.get("mode", "?"),
+        elapsed,
+        duration_sec / elapsed if elapsed > 0 else 0,
+    )
+
     return jsonify(result)
 
 
