@@ -61,6 +61,11 @@ def _init_ml_models() -> None:
         return
 
     model_files = {
+        # Embedding extractors
+        "vggish_embeddings": "audioset-vggish-3.pb",
+        "musicnn_embeddings": "msd-musicnn-1.pb",
+        "effnet_embeddings": "discogs_artist_embeddings-effnet-bs64-1.pb",
+        # Classification heads (run on top of embeddings)
         "voice_instrumental": "voice_instrumental-vggish-audioset-1.pb",
         "danceability": "danceability-vggish-audioset-1.pb",
         "valence_arousal": "deam-msd-musicnn-2.pb",
@@ -70,7 +75,6 @@ def _init_ml_models() -> None:
         "mood_aggressive": "mood_aggressive-audioset-vggish-1.pb",
         "mood_relaxed": "mood_relaxed-audioset-vggish-1.pb",
         "genre_discogs400": "genre_discogs400-discogs-effnet-1.pb",
-        "effnet_embeddings": "discogs_artist_embeddings-effnet-bs64-1.pb",
     }
 
     found = []
@@ -127,12 +131,10 @@ def _pcm_to_float32(pcm: bytes, bit_depth: int, channels: int) -> np.ndarray:
 
 
 def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
-    """Extract ML-based features using TensorFlow models.
+    """Extract ML-based features via two-stage pipeline.
 
-    Uses Essentia's end-to-end prediction classes (TensorflowPredictVGGish,
-    TensorflowPredictMusiCNN, TensorflowPredictEffnetDiscogs) which handle
-    embedding extraction + classification in a single call when given the
-    classification head model file.
+    Stage 1: Extract embeddings (VGGish, MusiCNN, EffNet)
+    Stage 2: Feed embeddings to classification heads
 
     :param audio_44k: Mono float32 audio at 44100 Hz.
     :returns: Dict of field_name -> value.
@@ -141,92 +143,123 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
     if not _ml_available:
         return results
 
-    # Resample to 16kHz for all ML models
     audio_16k = es.Resample(
         inputSampleRate=float(_TARGET_SR), outputSampleRate=float(_ML_SR)
     )(audio_44k)
 
-    # --- VGGish-based models (voice/instrumental, danceability, moods) ---
-    # Each classification head is passed directly to TensorflowPredictVGGish
-    # which handles embedding extraction internally.
+    # --- Stage 1: Extract embeddings ---
 
-    if "voice_instrumental" in _ml_models:
+    vggish_emb = None
+    if "vggish_embeddings" in _ml_models:
         try:
-            preds = es.TensorflowPredictVGGish(
-                graphFilename=str(_ml_models["voice_instrumental"]),
+            vggish_emb = es.TensorflowPredictVGGish(
+                graphFilename=str(_ml_models["vggish_embeddings"]),
+                output="model/vggish/embeddings",
             )(audio_16k)
-            # Class 0=voice, 1=instrumental
-            results["instrumentalness"] = _clamp(float(preds.mean(axis=0)[1]))
-            logger.debug("Instrumentalness: %.3f", results["instrumentalness"])
+            logger.info("VGGish embeddings: shape %s", vggish_emb.shape)
         except Exception as exc:
-            logger.error("Voice/instrumental failed: %s", exc, exc_info=True)
+            logger.error("VGGish embeddings failed: %s", exc, exc_info=True)
 
-    if "danceability" in _ml_models:
+    musicnn_emb = None
+    if "musicnn_embeddings" in _ml_models:
         try:
-            preds = es.TensorflowPredictVGGish(
-                graphFilename=str(_ml_models["danceability"]),
+            musicnn_emb = es.TensorflowPredictMusiCNN(
+                graphFilename=str(_ml_models["musicnn_embeddings"]),
+                output="model/dense/BiasAdd",
             )(audio_16k)
-            results["danceability"] = _clamp(float(preds.mean(axis=0)[1]))
-            logger.debug("Danceability ML: %.3f", results["danceability"])
+            logger.info("MusiCNN embeddings: shape %s", musicnn_emb.shape)
         except Exception as exc:
-            logger.error("Danceability ML failed: %s", exc, exc_info=True)
+            logger.error("MusiCNN embeddings failed: %s", exc, exc_info=True)
 
-    moods: dict[str, float] = {}
-    for mood_name in ("mood_happy", "mood_sad", "mood_aggressive", "mood_relaxed"):
-        if mood_name in _ml_models:
-            try:
-                preds = es.TensorflowPredictVGGish(
-                    graphFilename=str(_ml_models[mood_name]),
-                )(audio_16k)
-                moods[mood_name] = round(float(preds.mean(axis=0)[1]), 4)
-            except Exception as exc:
-                logger.error("%s failed: %s", mood_name, exc, exc_info=True)
-
-    # --- MusiCNN-based models (valence/arousal) ---
-    if "valence_arousal" in _ml_models:
+    effnet_emb = None
+    if "effnet_embeddings" in _ml_models:
         try:
-            preds = es.TensorflowPredictMusiCNN(
-                graphFilename=str(_ml_models["valence_arousal"]),
-            )(audio_16k)
-            # DEAM model outputs [arousal, valence] on a 1-9 scale
-            valence_raw = float(preds.mean(axis=0)[1])
-            results["valence"] = _clamp((valence_raw - 1.0) / 8.0)
-            logger.debug("Valence: %.3f (raw %.2f)", results["valence"], valence_raw)
-        except Exception as exc:
-            logger.error("Valence/arousal failed: %s", exc, exc_info=True)
-
-    # --- EffNet-based models (acoustic/electronic, genre) ---
-    if "acoustic_electronic" in _ml_models:
-        try:
-            preds = es.TensorflowPredictEffnetDiscogs(
-                graphFilename=str(_ml_models["acoustic_electronic"]),
-            )(audio_16k)
-            # Class 0=acoustic, 1=electronic — use class 0 for acousticness
-            results["acousticness"] = _clamp(float(preds.mean(axis=0)[0]))
-            logger.debug("Acousticness: %.3f", results["acousticness"])
-        except Exception as exc:
-            logger.error("Acoustic/electronic failed: %s", exc, exc_info=True)
-
-    genres: dict[str, float] = {}
-    if "genre_discogs400" in _ml_models and "effnet_embeddings" in _ml_models:
-        try:
-            # Extract EffNet embeddings first, then feed to genre classification head
-            embeddings = es.TensorflowPredictEffnetDiscogs(
+            effnet_emb = es.TensorflowPredictEffnetDiscogs(
                 graphFilename=str(_ml_models["effnet_embeddings"]),
                 output="PartitionedCall:1",
             )(audio_16k)
-            preds = es.TensorflowPredict2D(
-                graphFilename=str(_ml_models["genre_discogs400"]),
-                input="serving_default_model_Placeholder",
-                output="PartitionedCall:0",
-            )(embeddings)
-            mean_preds = preds.mean(axis=0)
-            top_indices = np.argsort(mean_preds)[::-1][:5]
-            for idx in top_indices:
-                label = _genre_labels[idx] if idx < len(_genre_labels) else f"genre_{idx}"
-                genres[label] = round(float(mean_preds[idx]), 4)
+            logger.info("EffNet embeddings: shape %s", effnet_emb.shape)
         except Exception as exc:
-            logger.error("Genre failed: %s", exc, exc_info=True)
+            logger.error("EffNet embeddings failed: %s", exc, exc_info=True)
+
+    # --- Stage 2: Classification heads ---
+
+    # VGGish-based heads
+    if vggish_emb is not None:
+        if "voice_instrumental" in _ml_models:
+            try:
+                preds = es.TensorflowPredict2D(
+                    graphFilename=str(_ml_models["voice_instrumental"]),
+                )(vggish_emb)
+                results["instrumentalness"] = _clamp(float(preds.mean(axis=0)[1]))
+                logger.info("Instrumentalness: %.3f", results["instrumentalness"])
+            except Exception as exc:
+                logger.error("Voice/instrumental failed: %s", exc, exc_info=True)
+
+        if "danceability" in _ml_models:
+            try:
+                preds = es.TensorflowPredict2D(
+                    graphFilename=str(_ml_models["danceability"]),
+                )(vggish_emb)
+                results["danceability"] = _clamp(float(preds.mean(axis=0)[1]))
+                logger.info("Danceability ML: %.3f", results["danceability"])
+            except Exception as exc:
+                logger.error("Danceability ML failed: %s", exc, exc_info=True)
+
+        moods: dict[str, float] = {}
+        for mood_name in ("mood_happy", "mood_sad", "mood_aggressive", "mood_relaxed"):
+            if mood_name in _ml_models:
+                try:
+                    preds = es.TensorflowPredict2D(
+                        graphFilename=str(_ml_models[mood_name]),
+                    )(vggish_emb)
+                    moods[mood_name] = round(float(preds.mean(axis=0)[1]), 4)
+                except Exception as exc:
+                    logger.error("%s failed: %s", mood_name, exc, exc_info=True)
+    else:
+        moods = {}
+
+    # MusiCNN-based heads
+    if musicnn_emb is not None and "valence_arousal" in _ml_models:
+        try:
+            preds = es.TensorflowPredict2D(
+                graphFilename=str(_ml_models["valence_arousal"]),
+            )(musicnn_emb)
+            valence_raw = float(preds.mean(axis=0)[1])
+            results["valence"] = _clamp((valence_raw - 1.0) / 8.0)
+            logger.info("Valence: %.3f (raw %.2f)", results["valence"], valence_raw)
+        except Exception as exc:
+            logger.error("Valence/arousal failed: %s", exc, exc_info=True)
+
+    # EffNet-based heads
+    if effnet_emb is not None:
+        if "acoustic_electronic" in _ml_models:
+            try:
+                preds = es.TensorflowPredict2D(
+                    graphFilename=str(_ml_models["acoustic_electronic"]),
+                )(effnet_emb)
+                results["acousticness"] = _clamp(float(preds.mean(axis=0)[0]))
+                logger.info("Acousticness: %.3f", results["acousticness"])
+            except Exception as exc:
+                logger.error("Acoustic/electronic failed: %s", exc, exc_info=True)
+
+        genres: dict[str, float] = {}
+        if "genre_discogs400" in _ml_models:
+            try:
+                preds = es.TensorflowPredict2D(
+                    graphFilename=str(_ml_models["genre_discogs400"]),
+                    input="serving_default_model_Placeholder",
+                    output="PartitionedCall:0",
+                )(effnet_emb)
+                mean_preds = preds.mean(axis=0)
+                top_indices = np.argsort(mean_preds)[::-1][:5]
+                for idx in top_indices:
+                    label = _genre_labels[idx] if idx < len(_genre_labels) else f"genre_{idx}"
+                    genres[label] = round(float(mean_preds[idx]), 4)
+            except Exception as exc:
+                logger.error("Genre failed: %s", exc, exc_info=True)
+    else:
+        genres = {}
 
     # Pack moods + genres into extra_data
     extra: dict[str, object] = {}
