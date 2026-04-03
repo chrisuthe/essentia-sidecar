@@ -13,7 +13,7 @@ Licensed under AGPL-3.0 (due to Essentia's license). Distributed separately from
 
 `latest` is an alias for `lite`.
 
-Both variants run on CPU. The "gpu" tag refers to the ML model capabilities, not a GPU requirement. The ML models are small classifiers — inference adds ~2-3 seconds per track on CPU, no GPU needed.
+The Lite image runs on CPU only. The Full image includes CUDA 11.8 + cuDNN 8 runtime and will use an NVIDIA GPU if available (pass `--gpus all` or use the deploy config below). Falls back to CPU gracefully if no GPU is present.
 
 ## Quick start
 
@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
 ```
 
-**Full (with ML models):**
+**Full (with ML models + GPU acceleration):**
 ```yaml
 services:
   essentia-sidecar:
@@ -35,7 +35,16 @@ services:
     ports:
       - "5030:5030"
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 ```
+
+Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. Without it, the image still works but uses CPU.
 
 ## ML models included (Full variant)
 

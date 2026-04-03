@@ -1,11 +1,8 @@
-FROM python:3.12-slim-bookworm
+# Stage 1: Build essentia-tensorflow in a Python 3.12 environment
+FROM python:3.12-slim-bookworm AS builder
 
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
@@ -15,7 +12,7 @@ RUN pip install --no-cache-dir \
     numpy==2.2.0
 
 # Download ML models
-RUN mkdir -p /app/models && cd /app/models \
+RUN mkdir -p /models && cd /models \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/danceability/danceability-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/deam/deam-msd-musicnn-2.pb \
@@ -25,17 +22,44 @@ RUN mkdir -p /app/models && cd /app/models \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_aggressive/mood_aggressive-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_relaxed/mood_relaxed-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb \
-    # Embedding extractors (needed by classification heads)
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/vggish/audioset-vggish-3.pb \
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/musicnn/msd-musicnn-1.pb \
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs_artist_embeddings-effnet-bs64-1.pb \
-    # Genre label mapping (400 Discogs styles)
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.json
+
+# Stage 2: Runtime with CUDA support
+# TF 2.11 (bundled with essentia-tensorflow) needs CUDA 11.x + cuDNN 8.x
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.12 from deadsnakes PPA (Ubuntu 22.04 only has 3.10)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-venv python3.12-distutils \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3.12 -m ensurepip
+
+WORKDIR /app
+
+# Copy installed packages from builder
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/dist-packages
+COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/gunicorn
+
+# Copy models
+COPY --from=builder /models /app/models
 
 COPY analyzer.py .
 
 ENV ESSENTIA_MODELS_PATH=/app/models
+# Tell TF where to find CUDA libs
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 
 EXPOSE 5030
 
-CMD ["gunicorn", "-b", "0.0.0.0:5030", "-w", "2", "--timeout", "300", "analyzer:app"]
+CMD ["python3.12", "-m", "gunicorn", "-b", "0.0.0.0:5030", "-w", "2", "--timeout", "300", "analyzer:app"]
