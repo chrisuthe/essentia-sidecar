@@ -1,0 +1,6 @@
+services:
+  essentia-sidecar:
+    build: .
+    ports:
+      - "5030:5030"
+    restart: unless-stopped
