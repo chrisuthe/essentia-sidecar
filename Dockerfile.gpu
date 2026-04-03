@@ -16,8 +16,8 @@ RUN pip install --no-cache-dir \
 
 # Download ML models
 RUN mkdir -p /app/models && cd /app/models \
-    && curl -sLO https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-vggish-audioset-1.pb \
-    && curl -sLO https://essentia.upf.edu/models/classification-heads/danceability/danceability-vggish-audioset-1.pb \
+    && curl -sLO https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-audioset-vggish-1.pb \
+    && curl -sLO https://essentia.upf.edu/models/classification-heads/danceability/danceability-audioset-vggish-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/deam/deam-msd-musicnn-2.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/nsynth_acoustic_electronic/nsynth_acoustic_electronic-discogs-effnet-1.pb \
     && curl -sLO https://essentia.upf.edu/models/classification-heads/mood_happy/mood_happy-audioset-vggish-1.pb \

@@ -60,29 +60,38 @@ def _init_ml_models() -> None:
         logger.info("No models directory at %s — ML features disabled", MODELS_PATH)
         return
 
-    model_files = {
+    # Each key can have multiple filename variants to try
+    model_files: dict[str, list[str]] = {
         # Embedding extractors
-        "vggish_embeddings": "audioset-vggish-3.pb",
-        "musicnn_embeddings": "msd-musicnn-1.pb",
-        "effnet_embeddings": "discogs_artist_embeddings-effnet-bs64-1.pb",
-        # Classification heads (run on top of embeddings)
-        "voice_instrumental": "voice_instrumental-vggish-audioset-1.pb",
-        "danceability": "danceability-vggish-audioset-1.pb",
-        "valence_arousal": "deam-msd-musicnn-2.pb",
-        "acoustic_electronic": "nsynth_acoustic_electronic-discogs-effnet-1.pb",
-        "mood_happy": "mood_happy-audioset-vggish-1.pb",
-        "mood_sad": "mood_sad-audioset-vggish-1.pb",
-        "mood_aggressive": "mood_aggressive-audioset-vggish-1.pb",
-        "mood_relaxed": "mood_relaxed-audioset-vggish-1.pb",
-        "genre_discogs400": "genre_discogs400-discogs-effnet-1.pb",
+        "vggish_embeddings": ["audioset-vggish-3.pb"],
+        "musicnn_embeddings": ["msd-musicnn-1.pb"],
+        "effnet_embeddings": ["discogs_artist_embeddings-effnet-bs64-1.pb"],
+        # Classification heads — try multiple filename patterns
+        "voice_instrumental": [
+            "voice_instrumental-audioset-vggish-1.pb",
+            "voice_instrumental-vggish-audioset-1.pb",
+        ],
+        "danceability": [
+            "danceability-audioset-vggish-1.pb",
+            "danceability-vggish-audioset-1.pb",
+        ],
+        "valence_arousal": ["deam-msd-musicnn-2.pb"],
+        "acoustic_electronic": ["nsynth_acoustic_electronic-discogs-effnet-1.pb"],
+        "mood_happy": ["mood_happy-audioset-vggish-1.pb"],
+        "mood_sad": ["mood_sad-audioset-vggish-1.pb"],
+        "mood_aggressive": ["mood_aggressive-audioset-vggish-1.pb"],
+        "mood_relaxed": ["mood_relaxed-audioset-vggish-1.pb"],
+        "genre_discogs400": ["genre_discogs400-discogs-effnet-1.pb"],
     }
 
     found = []
-    for key, filename in model_files.items():
-        path = MODELS_PATH / filename
-        if path.exists():
-            _ml_models[key] = path
-            found.append(key)
+    for key, filenames in model_files.items():
+        for filename in filenames:
+            path = MODELS_PATH / filename
+            if path.exists():
+                _ml_models[key] = path
+                found.append(f"{key} ({filename})")
+                break
 
     # Load genre label mapping
     global _genre_labels  # noqa: PLW0603
@@ -199,32 +208,36 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
     # Note: TensorflowPredict2D default input="model/Placeholder" output="model/Sigmoid"
     # Many classification heads use different node names — we need to specify them.
 
-    # Helper to try multiple node name patterns for a classification head
+    # Node name mappings per model type
+    _HEAD_NODES: dict[str, dict[str, str]] = {
+        "voice_instrumental": {"input": "model/Placeholder", "output": "model/Sigmoid"},
+        "danceability": {"input": "model/Placeholder", "output": "model/Sigmoid"},
+        "mood_happy": {"input": "model/Placeholder", "output": "model/Softmax"},
+        "mood_sad": {"input": "model/Placeholder", "output": "model/Softmax"},
+        "mood_aggressive": {"input": "model/Placeholder", "output": "model/Softmax"},
+        "mood_relaxed": {"input": "model/Placeholder", "output": "model/Softmax"},
+        "valence_arousal": {"input": "model/Placeholder", "output": "model/Identity"},
+        "acoustic_electronic": {"input": "model/Placeholder", "output": "model/Softmax"},
+        "genre_discogs400": {"input": "serving_default_model_Placeholder", "output": "PartitionedCall:0"},
+    }
+
     def _predict_head(
         model_key: str, embeddings: np.ndarray, label: str
     ) -> np.ndarray | None:
-        """Try loading a classification head with different node name patterns."""
+        """Run a classification head on pre-computed embeddings."""
         if model_key not in _ml_models:
             return None
         model_path = str(_ml_models[model_key])
-        # Try common node name patterns used by Essentia classification heads
-        patterns = [
-            {"input": "serving_default_model_Placeholder", "output": "PartitionedCall:0"},
-            {"input": "model/Placeholder", "output": "model/Sigmoid"},
-            {"input": "model/Placeholder", "output": "model/Identity"},
-            {},  # defaults
-        ]
-        for nodes in patterns:
-            try:
-                preds = es.TensorflowPredict2D(
-                    graphFilename=model_path, **nodes
-                )(embeddings)
-                logger.info("%s succeeded with nodes %s", label, nodes or "defaults")
-                return preds
-            except Exception:
-                continue
-        logger.error("%s failed with all node patterns", label)
-        return None
+        nodes = _HEAD_NODES.get(model_key, {})
+        try:
+            preds = es.TensorflowPredict2D(
+                graphFilename=model_path, **nodes
+            )(embeddings)
+            logger.info("%s OK (nodes: %s, shape: %s)", label, nodes.get("output", "default"), preds.shape)
+            return preds
+        except Exception as exc:
+            logger.error("%s failed: %s", label, exc)
+            return None
 
     # VGGish-based heads
     if vggish_emb is not None:
