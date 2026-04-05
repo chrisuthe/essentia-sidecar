@@ -86,7 +86,6 @@ _FLAT_TO_SHARP = {
 MODELS_PATH = Path(os.environ.get("ESSENTIA_MODELS_PATH", "/app/models"))
 _ml_available = False
 _ml_models: dict[str, Path] = {}
-_genre_labels: list[str] = []
 
 
 def _init_ml_models() -> None:
@@ -108,7 +107,6 @@ def _init_ml_models() -> None:
         "mood_sad": ["mood_sad-audioset-vggish-1.pb"],
         "mood_aggressive": ["mood_aggressive-audioset-vggish-1.pb"],
         "mood_relaxed": ["mood_relaxed-audioset-vggish-1.pb"],
-        "genre_discogs400": ["genre_discogs400-discogs-effnet-1.pb"],
     }
 
     found = []
@@ -190,10 +188,6 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
         "mood_relaxed": {"input": "model/Placeholder", "output": "model/Softmax"},
         "valence_arousal": {"input": "model/Placeholder", "output": "model/Identity"},
         "acoustic_electronic": {"input": "model/Placeholder", "output": "model/Softmax"},
-        "genre_discogs400": {
-            "input": "serving_default_model_Placeholder",
-            "output": "PartitionedCall:0",
-        },
     }
 
     def _predict_head(model_key: str, embeddings: np.ndarray, label: str) -> np.ndarray | None:
@@ -285,24 +279,10 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
             if preds is not None:
                 results["acousticness"] = _clamp(float(preds.mean(axis=0)[0]))
 
-            genres: dict[str, float] = {}
-            if "genre_discogs400" in _ml_models:
-                preds = _predict_head("genre_discogs400", effnet_emb, "Genre")
-                if preds is not None:
-                    mean_preds = preds.mean(axis=0)
-                    top_indices = np.argsort(mean_preds)[::-1][:5]
-                    for idx in top_indices:
-                        label = _genre_labels[idx] if idx < len(_genre_labels) else f"genre_{idx}"
-                        genres[label] = round(float(mean_preds[idx]), 4)
-        else:
-            genres = {}
-
-    # Pack moods + genres into extra_data
+    # Pack moods into extra_data
     extra: dict[str, object] = {}
     if moods:
         extra["moods"] = moods
-    if genres:
-        extra["genre_predictions"] = genres
     if extra:
         results["extra_data"] = extra
 
