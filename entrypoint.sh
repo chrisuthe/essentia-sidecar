@@ -4,6 +4,13 @@
 # Default: auto-detect from CPU cores
 # With GPU: fewer workers (GPU is the bottleneck, not CPU)
 # Without GPU: more workers (CPU-bound, parallelize freely)
+# Disable GPU before Python/TF starts if requested
+USE_GPU="${ESSENTIA_USE_GPU:-true}"
+if [ "$USE_GPU" = "false" ] || [ "$USE_GPU" = "0" ] || [ "$USE_GPU" = "no" ]; then
+    export CUDA_VISIBLE_DEVICES=""
+    echo "GPU disabled via ESSENTIA_USE_GPU — set CUDA_VISIBLE_DEVICES=''"
+fi
+
 if [ -z "$ESSENTIA_WORKERS" ]; then
     CORES=$(nproc 2>/dev/null || echo 2)
     USE_GPU="${ESSENTIA_USE_GPU:-true}"
