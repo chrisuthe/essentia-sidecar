@@ -9,8 +9,9 @@ if [ -z "$ESSENTIA_WORKERS" ]; then
     USE_GPU="${ESSENTIA_USE_GPU:-true}"
 
     if [ "$USE_GPU" = "true" ] || [ "$USE_GPU" = "1" ] || [ "$USE_GPU" = "yes" ]; then
-        # GPU mode: 2 workers — one runs ML on GPU while the other does CPU analysis
-        ESSENTIA_WORKERS=2
+        # GPU mode: 1 worker — gunicorn uses separate processes so threading.Lock
+        # can't protect GPU memory across workers. Single worker avoids OOM.
+        ESSENTIA_WORKERS=1
     else
         # CPU-only: use (cores / 2), min 2, max 8
         # Each worker is CPU-heavy so don't saturate all cores
