@@ -1,8 +1,11 @@
 # Lightweight (CPU only, no ML models)
 # docker compose up -d essentia-sidecar
 
-# Full (GPU + TensorFlow + ML models)
+# Full with GPU
 # docker compose --profile gpu up -d essentia-sidecar-gpu
+
+# Full without GPU (ML on CPU, parallel workers)
+# ESSENTIA_USE_GPU=false ESSENTIA_WORKERS=4 docker compose --profile gpu up -d essentia-sidecar-gpu
 
 services:
   essentia-sidecar:
@@ -10,6 +13,9 @@ services:
     ports:
       - "5030:5030"
     restart: unless-stopped
+    environment:
+      ESSENTIA_WORKERS: "${ESSENTIA_WORKERS:-}"
+      ESSENTIA_LOG_LEVEL: "${ESSENTIA_LOG_LEVEL:-INFO}"
 
   essentia-sidecar-gpu:
     build:
@@ -19,6 +25,10 @@ services:
       - "5030:5030"
     restart: unless-stopped
     profiles: [gpu]
+    environment:
+      ESSENTIA_USE_GPU: "${ESSENTIA_USE_GPU:-true}"
+      ESSENTIA_WORKERS: "${ESSENTIA_WORKERS:-}"
+      ESSENTIA_LOG_LEVEL: "${ESSENTIA_LOG_LEVEL:-INFO}"
     deploy:
       resources:
         reservations:

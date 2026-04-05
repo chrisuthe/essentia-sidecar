@@ -8,8 +8,9 @@ RUN pip install --no-cache-dir \
     gunicorn==23.0.0 \
     numpy==2.2.0
 
-COPY analyzer.py .
+COPY analyzer.py entrypoint.sh ./
+RUN chmod +x entrypoint.sh
 
 EXPOSE 5030
 
-CMD ["gunicorn", "-b", "0.0.0.0:5030", "-w", "2", "--timeout", "120", "analyzer:app"]
+ENTRYPOINT ["./entrypoint.sh"]

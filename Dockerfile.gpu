@@ -1,4 +1,4 @@
-# Stage 1: Install packages and download models in a clean Python env
+# Stage 1: Install packages and download models
 FROM python:3.10-slim-bullseye AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
@@ -25,7 +25,7 @@ RUN mkdir -p /models && cd /models \
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs_artist_embeddings-effnet-bs64-1.pb \
     && curl -sLO https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.json
 
-# Stage 2: CUDA runtime with Python packages copied in
+# Stage 2: CUDA runtime
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV NVIDIA_VISIBLE_DEVICES=all
@@ -38,15 +38,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy installed Python packages from builder (3.10 matches Ubuntu 22.04's system Python)
 COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/lib/python3/dist-packages
 COPY --from=builder /models /app/models
-COPY analyzer.py .
+COPY analyzer.py entrypoint.sh ./
+RUN chmod +x entrypoint.sh
 
 ENV ESSENTIA_MODELS_PATH=/app/models
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 
 EXPOSE 5030
 
-# Single worker to avoid GPU memory contention between workers
-CMD ["python3", "-m", "gunicorn", "-b", "0.0.0.0:5030", "-w", "1", "--timeout", "300", "analyzer:app"]
+ENTRYPOINT ["./entrypoint.sh"]
