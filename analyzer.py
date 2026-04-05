@@ -258,9 +258,15 @@ def _extract_ml_features(audio_44k: np.ndarray) -> dict[str, object]:
     if musicnn_emb is not None:
         preds = _predict_head("valence_arousal", musicnn_emb, "Valence/arousal")
         if preds is not None:
+            # DEAM outputs [arousal, valence] on a 1-9 scale
+            arousal_raw = float(preds.mean(axis=0)[0])
             valence_raw = float(preds.mean(axis=0)[1])
+            results["arousal"] = _clamp((arousal_raw - 1.0) / 8.0)
             results["valence"] = _clamp((valence_raw - 1.0) / 8.0)
-            logger.info("Valence: %.3f (raw %.2f)", results["valence"], valence_raw)
+            logger.info(
+                "Arousal: %.3f (raw %.2f), Valence: %.3f (raw %.2f)",
+                results["arousal"], arousal_raw, results["valence"], valence_raw,
+            )
 
     # EffNet-based heads
     if effnet_emb is not None:
@@ -477,7 +483,7 @@ def analyze_endpoint() -> Response:
     elapsed = time.monotonic() - t_start
 
     ml_fields = []
-    for f in ("instrumentalness", "valence", "acousticness"):
+    for f in ("instrumentalness", "valence", "arousal", "acousticness"):
         if f in result:
             ml_fields.append(f"{f}={result[f]:.2f}")
 
