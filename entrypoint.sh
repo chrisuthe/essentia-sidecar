@@ -7,8 +7,11 @@
 # Disable GPU before Python/TF starts if requested
 USE_GPU="${ESSENTIA_USE_GPU:-true}"
 if [ "$USE_GPU" = "false" ] || [ "$USE_GPU" = "0" ] || [ "$USE_GPU" = "no" ]; then
-    export CUDA_VISIBLE_DEVICES=""
-    echo "GPU disabled via ESSENTIA_USE_GPU — set CUDA_VISIBLE_DEVICES=''"
+    # CUDA_VISIBLE_DEVICES hides GPUs from TF/CUDA runtime
+    export CUDA_VISIBLE_DEVICES="-1"
+    # NVIDIA_VISIBLE_DEVICES=none tells the NVIDIA container runtime to not expose GPUs
+    export NVIDIA_VISIBLE_DEVICES=none
+    echo "GPU disabled — CUDA_VISIBLE_DEVICES=-1, NVIDIA_VISIBLE_DEVICES=none"
 fi
 
 if [ -z "$ESSENTIA_WORKERS" ]; then
